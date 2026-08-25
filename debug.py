@@ -12,7 +12,7 @@ SCOPES = [
     'https://www.googleapis.com/auth/drive'
 ]
 
-SPREADSHEET_NAME = 'สรุปยอดเงินธนาคาร'
+SPREADSHEET_ID = os.getenv('GOOGLE_SHEET_ID', '')  # ดึงจาก Environment Variables
 WORKSHEET_NAME = 'Balance'
 
 def get_credentials():
@@ -37,42 +37,17 @@ def get_credentials():
         print(f"✗ เกิดข้อผิดพลาดในการอ่าน Credentials: {e}")
         return None
 
-def get_or_create_spreadsheet(client):
-    """Get existing spreadsheet or create new one"""
+def get_or_create_worksheet(client, spreadsheet_id):
+    """Get existing worksheet or create new one by Sheet ID"""
     try:
-        # Try to open existing spreadsheet
-        print(f"🔍 กำลังค้นหา Spreadsheet: '{SPREADSHEET_NAME}'...")
-        spreadsheet = client.open(SPREADSHEET_NAME)
-        print(f"✓ พบ Spreadsheet: '{SPREADSHEET_NAME}'")
-        return spreadsheet
-    except gspread.SpreadsheetNotFound:
-        print(f"✗ ไม่พบ Spreadsheet: '{SPREADSHEET_NAME}'")
-        print(f"📝 กำลังสร้าง Spreadsheet ใหม่...")
-        
-        try:
-            # Create new spreadsheet
-            spreadsheet = client.create(SPREADSHEET_NAME)
-            print(f"✓ สร้าง Spreadsheet ใหม่สำเร็จ: '{SPREADSHEET_NAME}'")
-            
-            # Share with service account email (optional)
-            try:
-                creds_dict = json.loads(os.getenv('SERVICE_ACCOUNT_JSON', '{}'))
-                if not os.path.exists('service_account.json'):
-                    service_account_email = creds_dict.get('client_email', '')
-                    if service_account_email:
-                        print(f"📧 Service Account Email: {service_account_email}")
-                        print(f"⚠️  ตรวจสอบว่า Google Sheets ได้รับ Editor access แล้ว")
-            except:
-                pass
-            
-            return spreadsheet
-        except Exception as e:
-            print(f"✗ ไม่สามารถสร้าง Spreadsheet: {e}")
+        if not spreadsheet_id:
+            print("✗ ไม่พบ GOOGLE_SHEET_ID ใน Environment Variables")
             return None
-
-def get_or_create_worksheet(spreadsheet):
-    """Get existing worksheet or create new one"""
-    try:
+        
+        print(f"🔍 กำลังเปิด Spreadsheet จาก Sheet ID: {spreadsheet_id}...")
+        spreadsheet = client.open_by_key(spreadsheet_id)
+        print(f"✓ เปิด Spreadsheet สำเร็จ: '{spreadsheet.title}'")
+        
         # Try to get existing worksheet
         print(f"🔍 กำลังค้นหา Worksheet: '{WORKSHEET_NAME}'...")
         worksheet = spreadsheet.worksheet(WORKSHEET_NAME)
@@ -84,6 +59,7 @@ def get_or_create_worksheet(spreadsheet):
         
         try:
             # Create new worksheet
+            spreadsheet = client.open_by_key(spreadsheet_id)
             worksheet = spreadsheet.add_worksheet(title=WORKSHEET_NAME, rows=100, cols=5)
             print(f"✓ สร้าง Worksheet ใหม่สำเร็จ: '{WORKSHEET_NAME}'")
             
@@ -96,12 +72,27 @@ def get_or_create_worksheet(spreadsheet):
         except Exception as e:
             print(f"✗ ไม่สามารถสร้าง Worksheet: {e}")
             return None
+    except gspread.SpreadsheetNotFound:
+        print(f"✗ ไม่พบ Spreadsheet ด้วย Sheet ID: {spreadsheet_id}")
+        print("💡 ตรวจสอบว่า Sheet ID ถูกต้องหรือไม่")
+        return None
+    except Exception as e:
+        print(f"✗ เกิดข้อผิดพลาด: {e}")
+        return None
 
 def test_connection():
     """Test Google Sheets connection"""
     print("=" * 60)
-    print("🧪 ทดสอบการเชื่อมต่อ Google Sheets")
+    print("🧪 ทดสอบการเชื่อมต่อ Google Sheets (ใช้ Sheet ID)")
     print("=" * 60)
+    
+    # Step 1: Check if GOOGLE_SHEET_ID is set
+    print("\n[Step 0] ตรวจสอบ GOOGLE_SHEET_ID...")
+    if not SPREADSHEET_ID:
+        print("✗ ไม่พบ Environment Variable: GOOGLE_SHEET_ID")
+        print("💡 ตั้งค่า: export GOOGLE_SHEET_ID='your_sheet_id'")
+        return False
+    print(f"✓ พบ GOOGLE_SHEET_ID: {SPREADSHEET_ID}")
     
     # Step 1: Get credentials
     print("\n[Step 1] กำลังอ่าน Credentials...")
@@ -119,20 +110,14 @@ def test_connection():
         print(f"✗ ไม่สามารถเชื่อมต่อ Google Sheets API: {e}")
         return False
     
-    # Step 3: Get or create spreadsheet
-    print("\n[Step 3] กำลังค้นหาหรือสร้าง Spreadsheet...")
-    spreadsheet = get_or_create_spreadsheet(client)
-    if not spreadsheet:
-        return False
-    
-    # Step 4: Get or create worksheet
-    print("\n[Step 4] กำลังค้นหาหรือสร้าง Worksheet...")
-    worksheet = get_or_create_worksheet(spreadsheet)
+    # Step 3: Get or create worksheet
+    print("\n[Step 3] กำลังค้นหาหรือสร้าง Worksheet...")
+    worksheet = get_or_create_worksheet(client, SPREADSHEET_ID)
     if not worksheet:
         return False
     
-    # Step 5: Test write
-    print("\n[Step 5] กำลังทดสอบการเขียนข้อมูล...")
+    # Step 4: Test write
+    print("\n[Step 4] กำลังทดสอบการเขียนข้อมูล...")
     try:
         from datetime import datetime
         test_data = [
@@ -148,8 +133,8 @@ def test_connection():
         print(f"✗ ไม่สามารถเขียนข้อมูล: {e}")
         return False
     
-    # Step 6: Test read
-    print("\n[Step 6] กำลังทดสอบการอ่านข้อมูล...")
+    # Step 5: Test read
+    print("\n[Step 5] กำลังทดสอบการอ่านข้อมูล...")
     try:
         records = worksheet.get_all_records()
         print(f"✓ อ่านข้อมูลสำเร็จ! (พบ {len(records)} แถว)")
@@ -162,7 +147,7 @@ def test_connection():
     print("\n" + "=" * 60)
     print("✓ ทดสอบการเชื่อมต่อเสร็จสิ้น - ทุกอย่างถูกต้อง!")
     print("=" * 60)
-    print(f"\n📊 Spreadsheet URL: https://docs.google.com/spreadsheets/d/{spreadsheet.id}")
+    print(f"\n📊 Spreadsheet URL: https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}")
     
     return True
 
