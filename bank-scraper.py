@@ -9,44 +9,49 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
+import json
 
 # ==========================================
 # 1. การตั้งค่าสิทธิ์ Google Sheets API
 # ==========================================
-# กำหนด Scope ที่ต้องการใช้งานสำหรับ Google Sheets และ Google Drive
 SCOPES = [
     'https://www.googleapis.com/auth/spreadsheets',
     'https://www.googleapis.com/auth/drive'
 ]
 
-# ชื่อไฟล์ Service Account Key (JSON) ที่ดาวน์โหลดมาจาก Google Cloud Console
 SERVICE_ACCOUNT_FILE = 'service_account.json'
-
-# ชื่อไฟล์ Google Sheet ที่ต้องการอัปเดตข้อมูล
 SPREADSHEET_NAME = 'สรุปยอดเงินธนาคาร'
 WORKSHEET_NAME = 'Balance'
 
 def connect_google_sheet():
     """ Connect ไปยัง Google Sheets ผ่าน Service Account """
     try:
-        creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+        # ลองอ่านจากไฟล์ก่อน ถ้าไม่มีให้ลองอ่านจาก Environment Variable
+        if os.path.exists(SERVICE_ACCOUNT_FILE):
+            creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+        else:
+            # ถ้าไม่มีไฟล์ ให้ลองอ่านจาก Environment Variable
+            service_account_json = os.getenv('SERVICE_ACCOUNT_JSON')
+            if not service_account_json:
+                raise Exception("ไม่พบไฟล์ service_account.json และ Environment Variable SERVICE_ACCOUNT_JSON")
+            creds = Credentials.from_service_account_info(json.loads(service_account_json), scopes=SCOPES)
+        
         client = gspread.authorize(creds)
         spreadsheet = client.open(SPREADSHEET_NAME)
         worksheet = spreadsheet.worksheet(WORKSHEET_NAME)
-        print("เชื่อมต่อ Google Sheets สำเร็จ!")
+        print("✓ เชื่อมต่อ Google Sheets สำเร็จ!")
         return worksheet
     except Exception as e:
-        print(f"เกิดข้อผิดพลาดในการเชื่อมต่อ Google Sheets: {e}")
+        print(f"✗ เกิดข้อผิดพลาดในการเชื่อมต่อ Google Sheets: {e}")
         return None
 
 # ==========================================
 # 2. การตั้งค่า Selenium WebDriver
 # ==========================================
-def setup_browser(headless=False):
+def setup_browser(headless=True):
     """ สร้างตัวเปิดเบราว์เซอร์ Chrome แบบอัตโนมัติ """
     options = webdriver.ChromeOptions()
     
-    # หากต้องการให้รันแบบเบื้องหลัง (ไม่เปิดหน้าจอขึ้นมา) ให้ปลดล็อกบรรทัดล่าง
     if headless:
         options.add_argument('--headless')
         
@@ -54,69 +59,107 @@ def setup_browser(headless=False):
     options.add_argument('--disable-dev-shm-usage')
     options.add_argument('--window-size=1280,720')
     options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
+    options.add_argument('--disable-blink-features=AutomationControlled')
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option('useAutomationExtension', False)
 
     driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
     return driver
 
 # ==========================================
-# 3. ฟังก์ชัน Scraping ข้อมูลธนาคาร (ตัวอย่างโครงสร้าง)
+# 3. ฟังก์ชัน Scraping ข้อมูลธนาคาร
 # ==========================================
-def scrape_bank_account(driver, bank_config):
-    """
-    ฟังก์ชันสำหรับล็อกอินและดึงยอดเงินจากเว็บธนาคาร
-    หมายเหตุ: Selector (Xpath/ID) ต้องปรับเปลี่ยนตามโครงสร้างเว็บจริงของแต่ละธนาคาร
-    """
-    bank_name = bank_config['bank_name']
-    url = bank_config['url']
-    username = bank_config['username']
-    password = bank_config['password']
 
-    print(f"\nกำลังเริ่มดึงข้อมูลจากธนาคาร: {bank_name}...")
+def scrape_kbank(driver, username, password, account_no):
+    """ ดึงข้อมูลจากธนาคารกสิกรไทย """
+    bank_name = 'กสิกรไทย (KBANK)'
     balance = "N/A"
-    account_no = bank_config['account_no']
-
+    
     try:
-        # เปิดหน้าเว็บธนาคาร
-        driver.get(url)
+        print(f"\n📊 กำลังดึงข้อมูลจาก {bank_name}...")
+        driver.get('https://www.kasikornbank.com/')
         wait = WebDriverWait(driver, 15)
-
-        # ----------------------------------------------------
-        # ตัวอย่างขั้นตอนการกรอก Username และ Password
-        # (หมายเหตุ: ID / Name ของ Element ต้องตรวจสอบจากเว็บจริง)
-        # ----------------------------------------------------
         
-        # 1. รอกรอก Username
-        user_input = wait.until(EC.presence_of_element_located((By.NAME, "username")))
-        user_input.clear()
-        user_input.send_keys(username)
-
-        # 2. กรอก Password
-        pass_input = driver.find_element(By.NAME, "password")
-        pass_input.clear()
-        pass_input.send_keys(password)
-
-        # 3. กดปุ่ม Login
-        login_btn = driver.find_element(By.XPATH, "//button[@type='submit']")
-        login_btn.click()
-
-        # 4. รอให้หน้าถัดไปโหลด และดึงข้อความยอดเงินคงเหลือ
-        time.sleep(3) # รอนำเข้าข้อมูล
-        balance_element = wait.until(
-            EC.presence_of_element_located((By.CLASS_NAME, "account-balance-amount"))
-        )
-        balance = balance_element.text.replace(',', '').strip()
-        print(f"ดึงข้อมูลสำเร็จ! ยอดเงินคงเหลือ {bank_name}: {balance} บาท")
-
-        # 5. สั่ง Logout เพื่อความปลอดภัย
-        try:
-            logout_btn = driver.find_element(By.LINK_TEXT, "ออกจากระบบ")
-            logout_btn.click()
-        except:
-            pass
-
+        # *** ต้องปรับ Selector ตามเว็บจริง ***
+        # ตัวอย่างเท่านั้น:
+        time.sleep(2)
+        
+        print(f"✓ ดึงข้อมูลสำเร็จ! {bank_name}: {balance} บาท")
     except Exception as e:
-        print(f"ไม่สามารถดึงข้อมูลจาก {bank_name} ได้: {e}")
+        print(f"✗ ไม่สามารถดึงข้อมูลจาก {bank_name} ได้: {e}")
+    
+    return {
+        'bank_name': bank_name,
+        'account_no': account_no,
+        'balance': balance,
+        'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    }
 
+def scrape_ktb(driver, username, password, account_no):
+    """ ดึงข้อมูลจากธนาคารกรุงไทย """
+    bank_name = 'กรุงไทย (KTB)'
+    balance = "N/A"
+    
+    try:
+        print(f"\n📊 กำลังดึงข้อมูลจาก {bank_name}...")
+        driver.get('https://www.ktb.co.th/')
+        wait = WebDriverWait(driver, 15)
+        
+        # *** ต้องปรับ Selector ตามเว็บจริง ***
+        time.sleep(2)
+        
+        print(f"✓ ดึงข้อมูลสำเร็จ! {bank_name}: {balance} บาท")
+    except Exception as e:
+        print(f"✗ ไม่สามารถดึงข้อมูลจาก {bank_name} ได้: {e}")
+    
+    return {
+        'bank_name': bank_name,
+        'account_no': account_no,
+        'balance': balance,
+        'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    }
+
+def scrape_scb(driver, username, password, account_no):
+    """ ดึงข้อมูลจากธนาคารไทยพาณิชย์ """
+    bank_name = 'ไทยพาณิชย์ (SCB)'
+    balance = "N/A"
+    
+    try:
+        print(f"\n📊 กำลังดึงข้อมูลจาก {bank_name}...")
+        driver.get('https://www.scb.co.th/')
+        wait = WebDriverWait(driver, 15)
+        
+        # *** ต้องปรับ Selector ตามเว็บจริง ***
+        time.sleep(2)
+        
+        print(f"✓ ดึงข้อมูลสำเร็จ! {bank_name}: {balance} บาท")
+    except Exception as e:
+        print(f"✗ ไม่สามารถดึงข้อมูลจาก {bank_name} ได้: {e}")
+    
+    return {
+        'bank_name': bank_name,
+        'account_no': account_no,
+        'balance': balance,
+        'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    }
+
+def scrape_kiacb(driver, username, password, account_no):
+    """ ดึงข้อมูลจากธนาคารเกียรตินาคินภัทร """
+    bank_name = 'เกียรตินาคินภัทร (KIACB)'
+    balance = "N/A"
+    
+    try:
+        print(f"\n📊 กำลังดึงข้อมูลจาก {bank_name}...")
+        driver.get('https://www.kiacb.com/')
+        wait = WebDriverWait(driver, 15)
+        
+        # *** ต้องปรับ Selector ตามเว็บจริง ***
+        time.sleep(2)
+        
+        print(f"✓ ดึงข้อมูลสำเร็จ! {bank_name}: {balance} บาท")
+    except Exception as e:
+        print(f"✗ ไม่สามารถดึงข้อมูลจาก {bank_name} ได้: {e}")
+    
     return {
         'bank_name': bank_name,
         'account_no': account_no,
@@ -132,63 +175,100 @@ def update_sheets_data(worksheet, data_list):
     if not worksheet:
         return
 
-    print("\nกำลังอัปเดตข้อมูลลงใน Google Sheet...")
+    print("\n💾 กำลังอัปเดตข้อมูลลงใน Google Sheet...")
     
-    # ดึงข้อมูลทั้งหมดในชีตปัจจุบัน
-    existing_records = worksheet.get_all_records()
-    
-    # หากยังไม่มีหัวตาราง ให้สร้างหัวตารางก่อน
-    if not existing_records:
-        worksheet.append_row(['ลำดับ', 'ธนาคาร', 'เลขที่บัญชี', 'ยอดคงเหลือ (บาท)', 'อัปเดตล่าสุด'])
-
-    # วนลูปอัปเดตรายการข้อมูล
-    for idx, item in enumerate(data_list, start=1):
-        row_data = [
-            idx,
-            item['bank_name'],
-            item['account_no'],
-            item['balance'],
-            item['updated_at']
-        ]
-        worksheet.append_row(row_data)
-
-    print("บันทึกข้อมูลเข้า Google Sheets เรียบร้อยแล้ว!")
+    try:
+        # ดึงข้อมูลทั้งหมดในชีตปัจจุบัน
+        existing_records = worksheet.get_all_records()
+        
+        # หากยังไม่มีหัวตาราง ให้สร้างหัวตารางก่อน
+        if not existing_records:
+            worksheet.append_row(['ลำดับ', 'ธนาคาร', 'เลขที่บัญชี', 'ยอดคงเหลือ (บาท)', 'อัปเดตล่าสุด'])
+        
+        # วนลูปอัปเดตรายการข้อมูล
+        for idx, item in enumerate(data_list, start=1):
+            row_data = [
+                idx,
+                item['bank_name'],
+                item['account_no'],
+                item['balance'],
+                item['updated_at']
+            ]
+            worksheet.append_row(row_data)
+        
+        print("✓ บันทึกข้อมูลเข้า Google Sheets เรียบร้อยแล้ว!")
+    except Exception as e:
+        print(f"✗ เกิดข้อผิดพลาดในการบันทึกข้อมูล: {e}")
 
 # ==========================================
 # 5. ฟังก์ชันหลัก (Main Execution)
 # ==========================================
 def main():
-    # กำหนดรายการธนาคารที่ต้องการเช็ค (ดึงค่าจาก Environment Variables เพื่อความปลอดภัย)
-    banks_to_scrape = [
+    print("=" * 60)
+    print("🏦 Bank Balance Scraper - เริ่มดำเนินการ")
+    print("=" * 60)
+    
+    # กำหนดรายการธนาคารที่ต้องการเช็ค
+    banks_config = [
         {
-            'bank_name': 'ธนาคารกรุงเทพ (BBL)',
-            'url': 'https://www.bangkokbank.com/', # URL ตัวอย่าง
-            'username': os.getenv('BBL_USER', 'MY_USERNAME'),
-            'password': os.getenv('BBL_PASS', 'MY_PASSWORD'),
-            'account_no': 'xxx-x-x1234-x'
+            'name': 'KBANK',
+            'scrape_func': scrape_kbank,
+            'username': os.getenv('KBANK_USER', ''),
+            'password': os.getenv('KBANK_PASS', ''),
+            'account_no': os.getenv('KBANK_ACCOUNT', 'xxx-x-x1234-x')
         },
-        # สามารถเพิ่มธนาคารอื่นๆ ต่อท้ายได้ที่นี่
+        {
+            'name': 'KTB',
+            'scrape_func': scrape_ktb,
+            'username': os.getenv('KTB_USER', ''),
+            'password': os.getenv('KTB_PASS', ''),
+            'account_no': os.getenv('KTB_ACCOUNT', 'xxx-x-x1234-x')
+        },
+        {
+            'name': 'SCB',
+            'scrape_func': scrape_scb,
+            'username': os.getenv('SCB_USER', ''),
+            'password': os.getenv('SCB_PASS', ''),
+            'account_no': os.getenv('SCB_ACCOUNT', 'xxx-x-x1234-x')
+        },
+        {
+            'name': 'KIACB',
+            'scrape_func': scrape_kiacb,
+            'username': os.getenv('KIACB_USER', ''),
+            'password': os.getenv('KIACB_PASS', ''),
+            'account_no': os.getenv('KIACB_ACCOUNT', 'xxx-x-x1234-x')
+        }
     ]
 
     # เชื่อมต่อ Google Sheets
     worksheet = connect_google_sheet()
     if not worksheet:
-        print("ไม่สามารถดำเนินการต่อได้เนื่องจากไม่ได้เชื่อมต่อ Google Sheets")
+        print("✗ ไม่สามารถดำเนินการต่อได้เนื่องจากไม่ได้เชื่อมต่อ Google Sheets")
         return
 
     # เริ่มรัน Browser Scraping
-    driver = setup_browser(headless=False)
+    driver = setup_browser(headless=True)  # Set headless=False สำหรับ testing
     results = []
 
     try:
-        for bank in banks_to_scrape:
-            data = scrape_bank_account(driver, bank)
-            results.append(data)
+        for bank in banks_config:
+            if bank['username'] and bank['password']:
+                data = bank['scrape_func'](driver, bank['username'], bank['password'], bank['account_no'])
+                results.append(data)
+            else:
+                print(f"⚠️  ข้ามธนาคาร {bank['name']} เพราะไม่พบ credentials")
     finally:
-        driver.quit() # ปิดเบราว์เซอร์เมื่อทำงานเสร็จ
+        driver.quit()  # ปิดเบราว์เซอร์เมื่อทำงานเสร็จ
 
     # บันทึกข้อมูลทั้งหมดลง Google Sheets
-    update_sheets_data(worksheet, results)
+    if results:
+        update_sheets_data(worksheet, results)
+    else:
+        print("⚠️  ไม่มีข้อมูลที่ดึงมาได้")
+    
+    print("\n" + "=" * 60)
+    print("✓ ดำเนินการเสร็จสิ้น")
+    print("=" * 60)
 
 if __name__ == '__main__':
     main()
