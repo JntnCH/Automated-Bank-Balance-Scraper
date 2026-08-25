@@ -20,12 +20,16 @@ SCOPES = [
 ]
 
 SERVICE_ACCOUNT_FILE = 'service_account.json'
-SPREADSHEET_NAME = 'สรุปยอดเงินธนาคาร'
+GOOGLE_SHEET_ID = os.getenv('GOOGLE_SHEET_ID', '')  # ดึง Sheet ID จาก Environment Variables
 WORKSHEET_NAME = 'Balance'
 
 def connect_google_sheet():
-    """ Connect ไปยัง Google Sheets ผ่าน Service Account """
+    """ Connect ไปยัง Google Sheets ผ่าน Service Account โดยใช้ Sheet ID """
     try:
+        # ตรวจสอบ GOOGLE_SHEET_ID
+        if not GOOGLE_SHEET_ID:
+            raise Exception("ไม่พบ Environment Variable: GOOGLE_SHEET_ID")
+        
         # ลองอ่านจากไฟล์ก่อน ถ้าไม่มีให้ลองอ่านจาก Environment Variable
         if os.path.exists(SERVICE_ACCOUNT_FILE):
             creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
@@ -37,8 +41,19 @@ def connect_google_sheet():
             creds = Credentials.from_service_account_info(json.loads(service_account_json), scopes=SCOPES)
         
         client = gspread.authorize(creds)
-        spreadsheet = client.open(SPREADSHEET_NAME)
-        worksheet = spreadsheet.worksheet(WORKSHEET_NAME)
+        spreadsheet = client.open_by_key(GOOGLE_SHEET_ID)
+        
+        # ตรวจสอบว่ามี Worksheet ชื่อ WORKSHEET_NAME หรือไม่ ถ้าไม่มีให้สร้างใหม่
+        try:
+            worksheet = spreadsheet.worksheet(WORKSHEET_NAME)
+        except gspread.WorksheetNotFound:
+            print(f"⚠️  ไม่พบ Worksheet '{WORKSHEET_NAME}' กำลังสร้าง...")
+            worksheet = spreadsheet.add_worksheet(title=WORKSHEET_NAME, rows=100, cols=5)
+            # เพิ่มหัวตาราง
+            headers = ['ลำดับ', 'ธนาคาร', 'เลขที่บัญชี', 'ยอดคงเหลือ (บาท)', 'อัปเดตล่าสุด']
+            worksheet.append_row(headers)
+            print(f"✓ สร้าง Worksheet '{WORKSHEET_NAME}' สำเร็จ!")
+        
         print("✓ เชื่อมต่อ Google Sheets สำเร็จ!")
         return worksheet
     except Exception as e:
